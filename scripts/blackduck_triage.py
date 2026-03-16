@@ -117,21 +117,22 @@ def get_changelog(package_name, current_v, target_v):
         return f"Error fetching changelog: {e}"
 
 
-def build_prompt(project_name, vuln, usage, changelog):
-    vr = vuln["vulnerabilityWithRemediation"]
-    comp = vuln["componentName"]
-    curr_v = vuln["componentVersionName"]
-    target_v = vr.get("remediationTargetVersionName", "Unknown")
-    vuln_name = vr["vulnerabilityName"]
+def build_prompt(project_name, comp, curr_v, target_v, vulns_list, usage, changelog):
+    vuln_lines = "\n".join(
+        f"  - {v['name']} (Severity: {v['severity']})"
+        for v in vulns_list
+    )
 
     return f"""
 --- START PROMPT FOR {project_name} / {comp} ---
 Role: Senior Security Architect.
-Task: Analyze the effort to fix {vuln_name}.
+Task: Analyze the effort to remediate all vulnerabilities in {comp}.
 
 Context:
 - Project: {project_name}
 - Component: {comp} ({curr_v} -> {target_v})
+- Vulnerabilities ({len(vulns_list)}):
+{vuln_lines}
 - Usage: {usage}
 - Changelog Highlights:
 {changelog}
@@ -151,8 +152,8 @@ def main():
     projects = get_projects(token)
     print(f"Found {len(projects)} projects matching prefix '{PROJECT_PREFIX}'.")
 
-    prompts = []
-    summary = []
+    # Group vulnerabilities by (project, component, version)
+    packages = {}  # key: (project, component, version) -> dict
 
     for p in projects:
         name = p["name"]
@@ -168,27 +169,40 @@ def main():
         for v in vulns:
             comp = v["componentName"]
             curr_v = v["componentVersionName"]
-            target_v = v["vulnerabilityWithRemediation"].get(
-                "remediationTargetVersionName", "Unknown"
-            )
             vr = v["vulnerabilityWithRemediation"]
+            target_v = vr.get("remediationTargetVersionName", "Unknown")
+            key = (name, comp, curr_v)
 
-            usage = find_usage(comp, name)
-            changelog = get_changelog(comp, curr_v, target_v)
-            prompt = build_prompt(name, v, usage, changelog)
-            prompts.append(prompt)
-
-            summary.append(
-                {
+            if key not in packages:
+                packages[key] = {
                     "project": name,
                     "component": comp,
                     "current_version": curr_v,
                     "target_version": target_v,
+                    "vulnerabilities": [],
+                    "usage_files": find_usage(comp, name),
+                }
+
+            packages[key]["vulnerabilities"].append(
+                {
+                    "name": vr["vulnerabilityName"],
                     "severity": vr["severity"],
-                    "vulnerability": vr["vulnerabilityName"],
-                    "usage_files": usage,
                 }
             )
+            # Keep the most specific target version
+            if packages[key]["target_version"] == "Unknown" and target_v != "Unknown":
+                packages[key]["target_version"] = target_v
+
+    prompts = []
+    summary = list(packages.values())
+
+    for pkg in summary:
+        changelog = get_changelog(pkg["component"], pkg["current_version"], pkg["target_version"])
+        prompt = build_prompt(
+            pkg["project"], pkg["component"], pkg["current_version"],
+            pkg["target_version"], pkg["vulnerabilities"], pkg["usage_files"], changelog,
+        )
+        prompts.append(prompt)
 
     with open("LLM_Prompts.txt", "w", encoding="utf-8") as f:
         f.writelines(prompts)
@@ -196,7 +210,7 @@ def main():
     with open("vulnerability_summary.json", "w", encoding="utf-8") as f:
         json.dump(summary, f, indent=2)
 
-    print(f"\nDone! Generated {len(prompts)} prompts in 'LLM_Prompts.txt'.")
+    print(f"\nDone! Generated {len(prompts)} prompts for {len(summary)} packages in 'LLM_Prompts.txt'.")
     print(f"Summary written to 'vulnerability_summary.json'.")
 
 

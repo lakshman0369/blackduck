@@ -59,12 +59,27 @@ def get_vulnerabilities(token, version_href):
         "Authorization": f"Bearer {token}",
         "Accept": "application/vnd.blackducksoftware.bill-of-materials-6+json",
     }
-    res = requests.get(f"{version_href}/vulnerable-bom-components", headers=headers)
-    res.raise_for_status()
-    items = res.json().get("items", [])
+    all_items = []
+    offset = 0
+    limit = 100
+    while True:
+        params = {"offset": offset, "limit": limit}
+        res = requests.get(
+            f"{version_href}/vulnerable-bom-components",
+            headers=headers,
+            params=params,
+        )
+        res.raise_for_status()
+        data = res.json()
+        items = data.get("items", [])
+        all_items.extend(items)
+        total = data.get("totalCount", len(all_items))
+        offset += limit
+        if offset >= total or not items:
+            break
     return [
         i
-        for i in items
+        for i in all_items
         if i["vulnerabilityWithRemediation"]["severity"] in ("HIGH", "CRITICAL")
     ]
 

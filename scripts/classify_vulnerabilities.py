@@ -9,7 +9,7 @@ load_dotenv(Path(__file__).parent / ".env")
 
 GITHUB_TOKEN = os.environ["GH_PAT"]
 MODEL = "claude-3.5-sonnet"
-API_URL = "https://models.github.ai/inference/chat/completions"
+API_URL = "https://models.github.ai/inference/v1/chat/completions"
 PROMPTS_FILE = Path(__file__).resolve().parent.parent / "LLM_Prompts.txt"
 SUMMARY_FILE = Path(__file__).resolve().parent.parent / "vulnerability_summary.json"
 OUTPUT_FILE = Path(__file__).resolve().parent.parent / "classification_results.json"

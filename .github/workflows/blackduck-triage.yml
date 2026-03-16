@@ -39,7 +39,7 @@ jobs:
 
       - name: Classify vulnerabilities via LLM
         env:
-          GH_PAT: ${{ secrets.GH_PAT }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
         run: python scripts/classify_vulnerabilities.py
 
       - name: Upload artifacts

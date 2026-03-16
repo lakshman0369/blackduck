@@ -66,7 +66,6 @@ def get_vulnerabilities(token, version_href):
         i
         for i in items
         if i["vulnerabilityWithRemediation"]["severity"] in ("HIGH", "CRITICAL")
-        and i["vulnerabilityWithRemediation"]["remediationStatus"] == "NEW"
     ]
 
 

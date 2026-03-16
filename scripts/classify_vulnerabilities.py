@@ -8,9 +8,9 @@ from dotenv import load_dotenv
 
 load_dotenv(Path(__file__).parent / ".env")
 
-GEMINI_API_KEY = os.environ["GEMINI_API_KEY"]
-MODEL = "gemini-2.0-flash"
-API_URL = f"https://generativelanguage.googleapis.com/v1beta/models/{MODEL}:generateContent"
+GROQ_API_KEY = os.environ["GROQ_API_KEY"]
+MODEL = "llama-3.3-70b-versatile"
+API_URL = "https://api.groq.com/openai/v1/chat/completions"
 PROMPTS_FILE = Path(__file__).resolve().parent.parent / "LLM_Prompts.txt"
 SUMMARY_FILE = Path(__file__).resolve().parent.parent / "vulnerability_summary.json"
 OUTPUT_FILE = Path(__file__).resolve().parent.parent / "classification_results.json"
@@ -27,39 +27,42 @@ def parse_prompts():
 
 
 def call_llm(prompt):
-    system_instruction = (
-        "You are a Senior Security Architect. Respond ONLY with valid JSON. "
-        "No markdown, no explanation, no code fences. "
-        'Schema: {"severity": string, "effort_level": "Low"|"Medium"|"High", '
-        '"summary": string, "files_to_update": [string], "next_step": string}'
-    )
+    headers = {
+        "Authorization": f"Bearer {GROQ_API_KEY}",
+        "Content-Type": "application/json",
+    }
     payload = {
-        "system_instruction": {"parts": [{"text": system_instruction}]},
-        "contents": [{"parts": [{"text": prompt}]}],
-        "generationConfig": {
-            "temperature": 0.2,
-            "maxOutputTokens": 1024,
-        },
+        "model": MODEL,
+        "messages": [
+            {
+                "role": "system",
+                "content": (
+                    "You are a Senior Security Architect. Respond ONLY with valid JSON. "
+                    "No markdown, no explanation, no code fences. "
+                    'Schema: {"severity": string, "effort_level": "Low"|"Medium"|"High", '
+                    '"summary": string, "files_to_update": [string], "next_step": string}'
+                ),
+            },
+            {"role": "user", "content": prompt},
+        ],
+        "temperature": 0.2,
+        "max_tokens": 1024,
     }
     for attempt in range(5):
-        res = requests.post(
-            API_URL,
-            params={"key": GEMINI_API_KEY},
-            json=payload,
-            timeout=60,
-        )
+        res = requests.post(API_URL, headers=headers, json=payload, timeout=60)
         if res.status_code == 429:
             wait = 2 ** attempt * 5
             print(f"  Rate limited. Retrying in {wait}s (attempt {attempt + 1}/5)...")
             time.sleep(wait)
             continue
         if res.status_code != 200:
-            print(f"  Gemini API error: {res.status_code} | {res.text[:500]}")
+            print(f"  API error: {res.status_code} | {res.text[:500]}")
         res.raise_for_status()
         break
     else:
-        raise Exception("Gemini API rate limit exceeded after 5 retries")
-    content = res.json()["candidates"][0]["content"]["parts"][0]["text"].strip()
+        raise Exception("API rate limit exceeded after 5 retries")
+
+    content = res.json()["choices"][0]["message"]["content"].strip()
     content = re.sub(r"^```json\s*", "", content)
     content = re.sub(r"\s*```$", "", content)
     return json.loads(content)
@@ -76,7 +79,7 @@ def main():
     for i, (prompt, pkg) in enumerate(zip(prompts, summary)):
         label = f"{pkg['project']} / {pkg['component']}"
         if i > 0:
-            time.sleep(5)  # pace requests to avoid rate limits
+            time.sleep(3)
         print(f"[{i+1}/{len(prompts)}] Classifying {label}...")
         try:
             classification = call_llm(prompt)

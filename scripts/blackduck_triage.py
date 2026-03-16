@@ -260,18 +260,40 @@ def get_changelog(package_name, current_v, target_v):
         return f"Error fetching changelog: {e}"
 
 
-def get_npm_latest_version(package_name):
-    """Fetch the latest version from npm registry, trying case variations."""
-    names_to_try = [package_name, package_name.lower()]
+def get_npm_latest_version(component_name):
+    """Fetch the latest version from npm registry, trying multiple name strategies."""
+    names_to_try = list(dict.fromkeys([
+        component_name,
+        component_name.lower(),
+        component_name.replace(".", "").lower(),
+    ]))
     for name in names_to_try:
         try:
             res = requests.get(
-                f"https://registry.npmjs.org/{name}/latest", timeout=10
+                f"https://registry.npmjs.org/{name}", timeout=10
             )
             if res.status_code == 200:
-                return res.json().get("version", "Unknown")
+                data = res.json()
+                version = data.get("dist-tags", {}).get("latest")
+                if version:
+                    return version
         except Exception:
             continue
+    # Fallback: search npm for the component name
+    try:
+        res = requests.get(
+            "https://registry.npmjs.org/-/v1/search",
+            params={"text": component_name, "size": 5},
+            timeout=10,
+        )
+        if res.status_code == 200:
+            results = res.json().get("objects", [])
+            for r in results:
+                pkg_name = r.get("package", {}).get("name", "")
+                if pkg_name.lower() == component_name.lower():
+                    return r["package"].get("version", "Unknown")
+    except Exception:
+        pass
     return "Unknown"
 
 

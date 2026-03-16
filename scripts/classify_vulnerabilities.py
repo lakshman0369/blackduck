@@ -39,8 +39,17 @@ def call_llm(prompt):
                 "content": (
                     "You are a Senior Security Architect. Respond ONLY with valid JSON. "
                     "No markdown, no explanation, no code fences. "
-                    'Schema: {"severity": string, "effort_level": "Low"|"Medium"|"High", '
-                    '"summary": string, "files_to_update": [string], "next_step": string}'
+                    "Schema: {"
+                    '"severity": string, '
+                    '"effort_level": "Low"|"Medium"|"High", '
+                    '"dependency_type": "direct"|"transitive", '
+                    '"upgrade_type": "patch"|"minor"|"major"|"unknown", '
+                    '"summary": string, '
+                    '"remediation_approach": string, '
+                    '"files_to_update": [string], '
+                    '"breaking_changes": [string], '
+                    '"next_step": string'
+                    "}"
                 ),
             },
             {"role": "user", "content": prompt},
@@ -83,14 +92,17 @@ def main():
         print(f"[{i+1}/{len(prompts)}] Classifying {label}...")
         try:
             classification = call_llm(prompt)
+            # Merge package metadata
             classification["project"] = pkg["project"]
             classification["component"] = pkg["component"]
             classification["current_version"] = pkg["current_version"]
             classification["target_version"] = pkg["target_version"]
+            classification["npm_latest_version"] = pkg.get("npm_latest_version", "Unknown")
             classification["vulnerability_count"] = len(pkg["vulnerabilities"])
             classification["vulnerabilities"] = pkg["vulnerabilities"]
+            classification["parent_components"] = pkg.get("parent_components", [])
             results.append(classification)
-            print(f"  -> {classification['effort_level']} effort")
+            print(f"  -> {classification['effort_level']} effort | {classification.get('dependency_type', 'unknown')} | {classification.get('upgrade_type', 'unknown')} upgrade")
         except Exception as e:
             print(f"  -> ERROR: {e}")
             results.append({

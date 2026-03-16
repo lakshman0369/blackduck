@@ -1,0 +1,7 @@
+# Environment secrets
+scripts/.env
+.env
+
+# Output files
+LLM_Prompts.txt
+vulnerability_summary.json

@@ -150,6 +150,50 @@ def get_remediation_info(vuln_item):
     }
 
 
+def get_upgrade_guidance(token, version_href, component_id, version_id):
+    """Fetch Black Duck upgrade guidance for a component (short-term and long-term)."""
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Accept": "application/vnd.blackducksoftware.bill-of-materials-6+json",
+    }
+    try:
+        url = f"{version_href}/components/{component_id}/versions/{version_id}/upgrade-guidance"
+        res = requests.get(url, headers=headers, timeout=15)
+        if res.status_code == 200:
+            data = res.json()
+            short_term = data.get("shortTerm", {})
+            long_term = data.get("longTerm", {})
+            return {
+                "short_term_version": short_term.get("versionName", "Not available"),
+                "short_term_vuln_count": short_term.get("vulnerabilityCount", 0),
+                "long_term_version": long_term.get("versionName", "Not available"),
+                "long_term_vuln_count": long_term.get("vulnerabilityCount", 0),
+            }
+    except Exception as e:
+        print(f"    Warning: Could not fetch upgrade guidance: {e}")
+    return {
+        "short_term_version": "Not available",
+        "short_term_vuln_count": 0,
+        "long_term_version": "Not available",
+        "long_term_vuln_count": 0,
+    }
+
+
+def extract_ids_from_href(vuln_item):
+    """Extract component ID and version ID from the vulnerability item's _meta href."""
+    try:
+        href = vuln_item.get("_meta", {}).get("href", "")
+        # href format: .../components/{comp_id}/versions/{ver_id}/...
+        parts = href.split("/")
+        comp_idx = parts.index("components") if "components" in parts else -1
+        ver_idx = parts.index("versions") if "versions" in parts else -1
+        comp_id = parts[comp_idx + 1] if comp_idx >= 0 else None
+        ver_id = parts[ver_idx + 1] if ver_idx >= 0 else None
+        return comp_id, ver_id
+    except Exception:
+        return None, None
+
+
 def get_dependency_type(vuln_item):
     """Determine if the component is a direct or transitive dependency."""
     match_types = vuln_item.get("matchTypes", [])
@@ -260,13 +304,15 @@ def get_changelog(package_name, current_v, target_v):
         return f"Error fetching changelog: {e}"
 
 
-def get_npm_latest_version(component_name):
-    """Fetch the latest version from npm registry, trying multiple name strategies."""
+def get_npm_latest_version(component_name, current_version):
+    """Fetch the latest version from npm registry, matching against current version."""
+    clean_current = re.sub(r"^[vV]", "", current_version or "")
     names_to_try = list(dict.fromkeys([
         component_name,
         component_name.lower(),
         component_name.replace(".", "").lower(),
     ]))
+    best_match = None
     for name in names_to_try:
         try:
             res = requests.get(
@@ -274,12 +320,19 @@ def get_npm_latest_version(component_name):
             )
             if res.status_code == 200:
                 data = res.json()
-                version = data.get("dist-tags", {}).get("latest")
-                if version:
-                    return version
+                versions = data.get("versions", {})
+                latest = data.get("dist-tags", {}).get("latest")
+                # If current version exists in this package, it's the right one
+                if clean_current in versions:
+                    return latest or "Unknown"
+                # Store first valid result as fallback
+                if not best_match and latest:
+                    best_match = latest
         except Exception:
             continue
-    # Fallback: search npm for the component name
+    if best_match:
+        return best_match
+    # Fallback: search npm
     try:
         res = requests.get(
             "https://registry.npmjs.org/-/v1/search",
@@ -287,8 +340,7 @@ def get_npm_latest_version(component_name):
             timeout=10,
         )
         if res.status_code == 200:
-            results = res.json().get("objects", [])
-            for r in results:
+            for r in res.json().get("objects", []):
                 pkg_name = r.get("package", {}).get("name", "")
                 if pkg_name.lower() == component_name.lower():
                     return r["package"].get("version", "Unknown")
@@ -309,6 +361,10 @@ def build_prompt(pkg, changelog):
         dep_info += f"\n  Parent Components: {', '.join(pkg['parent_components'])}"
 
     upgrade_info = f"Upgrade Type: {pkg['upgrade_type']}"
+    if pkg.get("bd_short_term_upgrade", "Not available") != "Not available":
+        upgrade_info += f"\n  Black Duck Short-Term Upgrade: {pkg['bd_short_term_upgrade']}"
+    if pkg.get("bd_long_term_upgrade", "Not available") != "Not available":
+        upgrade_info += f"\n  Black Duck Long-Term Upgrade: {pkg['bd_long_term_upgrade']} (known vulns: {pkg.get('bd_long_term_vuln_count', 'N/A')})"
     if pkg["npm_latest_version"] != "Unknown":
         upgrade_info += f"\n  Latest Available on npm: {pkg['npm_latest_version']}"
 
@@ -384,8 +440,23 @@ def main():
             remediation = get_remediation_info(v)
 
             if key not in packages:
-                npm_latest = get_npm_latest_version(comp)
-                upgrade_type = classify_upgrade(curr_v, target_v)
+                npm_latest = get_npm_latest_version(comp, curr_v)
+
+                # Fetch Black Duck upgrade guidance
+                comp_id, ver_id = extract_ids_from_href(v)
+                guidance = {"short_term_version": "Not available", "short_term_vuln_count": 0,
+                            "long_term_version": "Not available", "long_term_vuln_count": 0}
+                if comp_id and ver_id:
+                    guidance = get_upgrade_guidance(token, version_href, comp_id, ver_id)
+
+                # Determine best target version: short-term > long-term > npm latest
+                effective_target = target_v
+                if effective_target == "Unknown" and guidance["short_term_version"] != "Not available":
+                    effective_target = guidance["short_term_version"]
+                if effective_target == "Unknown" and guidance["long_term_version"] != "Not available":
+                    effective_target = guidance["long_term_version"]
+
+                upgrade_type = classify_upgrade(curr_v, effective_target)
                 if upgrade_type == "unknown" and npm_latest != "Unknown":
                     upgrade_type = classify_upgrade(curr_v, npm_latest) + " (to latest)"
 
@@ -393,7 +464,10 @@ def main():
                     "project": name,
                     "component": comp,
                     "current_version": curr_v,
-                    "target_version": target_v,
+                    "target_version": effective_target,
+                    "bd_short_term_upgrade": guidance["short_term_version"],
+                    "bd_long_term_upgrade": guidance["long_term_version"],
+                    "bd_long_term_vuln_count": guidance["long_term_vuln_count"],
                     "dependency_type": dep_info["dependency_type"],
                     "match_types": dep_info["match_types"],
                     "parent_components": dep_info["parent_components"],

@@ -152,9 +152,7 @@ def get_remediation_info(vuln_item):
 
 def get_dependency_type(vuln_item):
     """Determine if the component is a direct or transitive dependency."""
-    # Black Duck provides matchType in the vulnerable-bom-components response
     match_types = vuln_item.get("matchTypes", [])
-    # Also check for activityData or origins
     origins = vuln_item.get("origins", [])
 
     is_transitive = False
@@ -166,15 +164,12 @@ def get_dependency_type(vuln_item):
         if ext_ns and ext_id:
             parent_components.append(f"{ext_ns}:{ext_id}")
 
-    # If component has "FILE_DEPENDENCY_TRANSITIVE" in matchTypes, it's transitive
     for mt in match_types:
         if "TRANSITIVE" in mt.upper():
             is_transitive = True
             break
 
-    # Fallback: check if there's hierarchical info
     if not match_types:
-        # Try to infer from the component data
         dep_type = vuln_item.get("dependencyType", "")
         if dep_type:
             is_transitive = "TRANSITIVE" in dep_type.upper()
@@ -184,6 +179,38 @@ def get_dependency_type(vuln_item):
         "match_types": match_types,
         "parent_components": parent_components,
     }
+
+
+def get_bom_component_details(token, version_href, component_name):
+    """Check BOM components for dependency hierarchy info."""
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Accept": "application/vnd.blackducksoftware.bill-of-materials-6+json",
+    }
+    try:
+        res = requests.get(
+            f"{version_href}/components",
+            headers=headers,
+            params={"q": f"componentName:{component_name}", "limit": 10},
+            timeout=15,
+        )
+        if res.status_code == 200:
+            items = res.json().get("items", [])
+            for item in items:
+                if item.get("componentName", "").lower() == component_name.lower():
+                    match_types = item.get("matchTypes", [])
+                    origins = item.get("origins", [])
+                    is_transitive = any(
+                        "TRANSITIVE" in mt.upper() for mt in match_types
+                    )
+                    return {
+                        "dependency_type": "transitive" if is_transitive else "direct",
+                        "match_types": match_types,
+                        "origins": origins,
+                    }
+    except Exception as e:
+        print(f"    Warning: Could not fetch BOM details for {component_name}: {e}")
+    return None
 
 
 def find_usage(package_name, project_name):
@@ -234,15 +261,17 @@ def get_changelog(package_name, current_v, target_v):
 
 
 def get_npm_latest_version(package_name):
-    """Fetch the latest version from npm registry."""
-    try:
-        res = requests.get(
-            f"https://registry.npmjs.org/{package_name}/latest", timeout=10
-        )
-        if res.status_code == 200:
-            return res.json().get("version", "Unknown")
-    except Exception:
-        pass
+    """Fetch the latest version from npm registry, trying case variations."""
+    names_to_try = [package_name, package_name.lower()]
+    for name in names_to_try:
+        try:
+            res = requests.get(
+                f"https://registry.npmjs.org/{name}/latest", timeout=10
+            )
+            if res.status_code == 200:
+                return res.json().get("version", "Unknown")
+        except Exception:
+            continue
     return "Unknown"
 
 
@@ -324,6 +353,12 @@ def main():
 
             # Get dependency type info
             dep_info = get_dependency_type(v)
+            # Enrich with BOM component details if vuln response lacks match types
+            if not dep_info["match_types"]:
+                bom_details = get_bom_component_details(token, version_href, comp)
+                if bom_details:
+                    dep_info["dependency_type"] = bom_details["dependency_type"]
+                    dep_info["match_types"] = bom_details["match_types"]
             remediation = get_remediation_info(v)
 
             if key not in packages:

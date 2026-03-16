@@ -1,6 +1,7 @@
 import json
 import os
 import re
+import time
 import requests
 from pathlib import Path
 from dotenv import load_dotenv
@@ -40,15 +41,24 @@ def call_llm(prompt):
             "maxOutputTokens": 1024,
         },
     }
-    res = requests.post(
-        API_URL,
-        params={"key": GEMINI_API_KEY},
-        json=payload,
-        timeout=60,
-    )
-    if res.status_code != 200:
-        print(f"  Gemini API error: {res.status_code} | {res.text[:500]}")
-    res.raise_for_status()
+    for attempt in range(5):
+        res = requests.post(
+            API_URL,
+            params={"key": GEMINI_API_KEY},
+            json=payload,
+            timeout=60,
+        )
+        if res.status_code == 429:
+            wait = 2 ** attempt * 5
+            print(f"  Rate limited. Retrying in {wait}s (attempt {attempt + 1}/5)...")
+            time.sleep(wait)
+            continue
+        if res.status_code != 200:
+            print(f"  Gemini API error: {res.status_code} | {res.text[:500]}")
+        res.raise_for_status()
+        break
+    else:
+        raise Exception("Gemini API rate limit exceeded after 5 retries")
     content = res.json()["candidates"][0]["content"]["parts"][0]["text"].strip()
     content = re.sub(r"^```json\s*", "", content)
     content = re.sub(r"\s*```$", "", content)
@@ -65,6 +75,8 @@ def main():
     results = []
     for i, (prompt, pkg) in enumerate(zip(prompts, summary)):
         label = f"{pkg['project']} / {pkg['component']}"
+        if i > 0:
+            time.sleep(5)  # pace requests to avoid rate limits
         print(f"[{i+1}/{len(prompts)}] Classifying {label}...")
         try:
             classification = call_llm(prompt)

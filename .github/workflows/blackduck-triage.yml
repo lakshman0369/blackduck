@@ -37,6 +37,11 @@ jobs:
           REPO_ROOT: ${{ github.workspace }}
         run: python scripts/blackduck_triage.py
 
+      - name: Classify vulnerabilities via LLM
+        env:
+          GH_PAT: ${{ secrets.GH_PAT }}
+        run: python scripts/classify_vulnerabilities.py
+
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
@@ -44,4 +49,5 @@ jobs:
           path: |
             LLM_Prompts.txt
             vulnerability_summary.json
+            classification_results.json
           retention-days: 30

@@ -8,12 +8,15 @@ from dotenv import load_dotenv
 load_dotenv(Path(__file__).parent / ".env")
 
 GITHUB_TOKEN = os.environ["GH_PAT"]
-MODEL = "claude-3.5-sonnet"
+CANDIDATE_MODELS = [
+    "claude-3.5-sonnet",
+    "anthropic/claude-3.5-sonnet",
+]
 CANDIDATE_URLS = [
-    "https://models.inference.github.com/chat/completions",
-    "https://models.github.ai/inference/v1/chat/completions",
+    "https://models.github.ai/chat/completions",
+    "https://models.github.ai/v1/chat/completions",
     "https://models.github.ai/inference/chat/completions",
-    "https://api.github.com/models/chat/completions",
+    "https://models.github.ai/inference/v1/chat/completions",
 ]
 PROMPTS_FILE = Path(__file__).resolve().parent.parent / "LLM_Prompts.txt"
 SUMMARY_FILE = Path(__file__).resolve().parent.parent / "vulnerability_summary.json"
@@ -21,27 +24,28 @@ OUTPUT_FILE = Path(__file__).resolve().parent.parent / "classification_results.j
 
 
 def discover_endpoint():
-    """Try candidate URLs and return the first one that doesn't 404."""
+    """Try candidate URL + model combos and return the first working pair."""
     headers = {
         "Authorization": f"Bearer {GITHUB_TOKEN}",
         "Content-Type": "application/json",
     }
-    test_payload = {
-        "model": MODEL,
-        "messages": [{"role": "user", "content": "Say OK"}],
-        "max_tokens": 5,
-    }
     for url in CANDIDATE_URLS:
-        try:
-            print(f"  Trying {url}...")
-            res = requests.post(url, headers=headers, json=test_payload, timeout=15)
-            if res.status_code != 404:
-                print(f"  -> Using {url} (status: {res.status_code})")
-                return url
-        except requests.exceptions.ConnectionError as e:
-            print(f"  -> Connection failed: {e}")
-            continue
-    return None
+        for model in CANDIDATE_MODELS:
+            try:
+                test_payload = {
+                    "model": model,
+                    "messages": [{"role": "user", "content": "Say OK"}],
+                    "max_tokens": 5,
+                }
+                print(f"  Trying {url} with model {model}...")
+                res = requests.post(url, headers=headers, json=test_payload, timeout=15)
+                print(f"  -> Status: {res.status_code} | Body: {res.text[:200]}")
+                if res.status_code == 200:
+                    return url, model
+            except requests.exceptions.ConnectionError as e:
+                print(f"  -> Connection failed")
+                continue
+    return None, None
 
 
 def parse_prompts():
@@ -54,13 +58,13 @@ def parse_prompts():
     return [b.strip() for b in blocks]
 
 
-def call_llm(api_url, prompt):
+def call_llm(api_url, model, prompt):
     headers = {
         "Authorization": f"Bearer {GITHUB_TOKEN}",
         "Content-Type": "application/json",
     }
     payload = {
-        "model": MODEL,
+        "model": model,
         "messages": [
             {
                 "role": "system",
@@ -95,21 +99,22 @@ def main():
         print(f"Warning: {len(prompts)} prompts but {len(summary)} packages in summary.")
 
     print("Discovering GitHub Models API endpoint...")
-    api_url = discover_endpoint()
+    api_url, model = discover_endpoint()
     if not api_url:
         print("ERROR: Could not find a working GitHub Models API endpoint.")
-        print("Make sure your GH_PAT has access to GitHub Models.")
+        print("Make sure your GH_PAT has the 'models' scope.")
         OUTPUT_FILE.write_text(json.dumps([{
-            "error": "No working GitHub Models API endpoint found. Tried: " + ", ".join(CANDIDATE_URLS)
+            "error": "No working GitHub Models API endpoint found."
         }], indent=2), encoding="utf-8")
         return
+    print(f"Using endpoint: {api_url} with model: {model}")
 
     results = []
     for i, (prompt, pkg) in enumerate(zip(prompts, summary)):
         label = f"{pkg['project']} / {pkg['component']}"
         print(f"[{i+1}/{len(prompts)}] Classifying {label}...")
         try:
-            classification = call_llm(api_url, prompt)
+            classification = call_llm(api_url, model, prompt)
             classification["project"] = pkg["project"]
             classification["component"] = pkg["component"]
             classification["current_version"] = pkg["current_version"]

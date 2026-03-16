@@ -32,7 +32,7 @@ jobs:
         env:
           BLACK_DUCK_URL: ${{ secrets.BLACK_DUCK_URL }}
           BLACK_DUCK_API_TOKEN: ${{ secrets.BLACK_DUCK_API_TOKEN }}
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_PAT: ${{ secrets.GH_PAT }}
           PROJECT_PREFIX: "sumtotal-React"
           REPO_ROOT: ${{ github.workspace }}
         run: python scripts/blackduck_triage.py

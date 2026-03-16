@@ -11,7 +11,7 @@ load_dotenv(Path(__file__).parent / ".env")
 # --- CONFIGURATION (from .env file / environment variables) ---
 BLACK_DUCK_URL = os.environ["BLACK_DUCK_URL"]
 API_TOKEN = os.environ["BLACK_DUCK_API_TOKEN"]
-GITHUB_TOKEN = os.environ["GITHUB_TOKEN"]
+GITHUB_TOKEN = os.environ["GH_PAT"]
 PROJECT_PREFIX = os.environ.get("PROJECT_PREFIX", "sumtotal-React")
 REPO_ROOT = os.environ.get("REPO_ROOT", os.getcwd())
 
